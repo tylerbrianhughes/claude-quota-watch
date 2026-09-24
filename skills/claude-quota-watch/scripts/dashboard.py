@@ -143,6 +143,7 @@ def dashboard_view(state, now, max_age=900, obligations=None, session_threshold=
         profiles = capacity.get("profiles", [name for name, a in state.get("aliases", {}).items() if a.get("email") == email])
         candidates = [x["minutes_to_threshold"] for x in windows if x["minutes_to_threshold"] is not None and not x["reset_before_threshold"]]
         rows.append({"email": email, "state": status, "profiles": profiles,
+                     "verification": capacity.get("verification"),
                      "process_count": capacity.get("process_count"), "observed_at": observed,
                      "age_seconds": age, "windows": windows,
                      "minutes_to_first_threshold": min(candidates) if candidates else None})

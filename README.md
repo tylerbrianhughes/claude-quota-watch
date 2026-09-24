@@ -73,3 +73,9 @@ Tests use synthetic accounts, fake collectors and local notification processes. 
 Several independent projects already offer automatic switching. See [related projects](docs/alternatives.md) for overlap with clauth, ccswap, ccswitch and subswapper. This package focuses on the recovery procedure; it does not claim automatic rotation is novel.
 
 MIT licensed. Independent project; not affiliated with Anthropic or OpenAI.
+
+### Independent standby verification
+
+Keep a separate, normally authenticated Claude configuration directory for each subscription, including the account currently carrying work. Rotating launchers must never be the only measurement route. Finish the CLI onboarding once and prove a disposable native `/usage` refresh before registering the route; `auth status` alone is insufficient. Do not copy credentials.
+
+The local fleet adapter now publishes a separate `capacity[email].verification` record (`state`, `reason`, last attempt/result), which the dashboard displays without confusing missing authentication with exhausted quota. Detect a lost standby route even while the active launcher still supplies fresh quota. Size the inference-free refresh batch for the whole inventory: Tyler's eleven-account deployment checks up to four independent standbys per three-minute cycle, refreshing from five minutes old and retaining the fifteen-minute validity cap. Retry failures separately and recheck after natural resets. This adapter scheduling policy is distinct from the public cache-only collector.

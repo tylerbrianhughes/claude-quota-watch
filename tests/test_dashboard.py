@@ -2,6 +2,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -21,6 +22,13 @@ def state():
 
 
 class DashboardTests(unittest.TestCase):
+    def test_verification_blocker_is_visible_separately_from_capacity(self):
+        data=state()
+        data['capacity'][A]['verification']={'state':'missing_route','reason':'No independent standby login configured.'}
+        row=d.dashboard_view(data,NOW)['accounts'][0]
+        self.assertEqual(row['state'],'available')
+        self.assertEqual(row['verification']['state'],'missing_route')
+
     def test_forecast_subtracts_age_and_uses_percentage_points(self):
         row = d.dashboard_view(state(), NOW+120)['accounts'][0]
         window = row['windows'][0]
@@ -107,6 +115,27 @@ class DashboardTests(unittest.TestCase):
 class FleetHealthTests(unittest.TestCase):
     def health(self, data=None, now=NOW):
         return d.dashboard_view(data or state(), now)['health']
+
+    def test_headline_distinguishes_next_switch_from_reset_and_purchase(self):
+        asset=SCRIPTS.parent/'assets/dashboard.js'
+        js="""
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const ctx={};vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(process.argv[1],'utf8').split("$('health-horizon').addEventListener")[0],ctx);
+const h={runway_minutes:67,active_accounts:1,ready_spares:0,next_potential_reset:{minutes:34}};
+let d=ctx.healthDecision(h,true,180);
+assert.equal(d.title,'Current capacity should bridge to the next reset');
+assert.equal(d.covered,false);
+assert.ok(d.action.includes('Replacement verification pending'));
+h.next_potential_reset.minutes=90;
+assert.equal(ctx.healthDecision(h,true,180).bridge,false);
+h.runway_minutes=0;
+assert.ok(ctx.healthDecision(h,true,180).title.startsWith('At risk now'));
+assert.ok(ctx.healthDecision(h,false,180).title.startsWith('Capacity unknown'));
+h.runway_minutes=67;h.ready_spares=1;
+assert.equal(ctx.healthDecision(h,true,180).title,'Next switch ahead: verified spare available');
+"""
+        subprocess.run(['node','-e',js,str(asset)],check=True)
 
     def test_runway_and_identical_account_scenario_use_guards(self):
         h=self.health(now=NOW+120)

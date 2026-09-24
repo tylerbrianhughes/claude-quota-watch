@@ -25,6 +25,25 @@ Honor existing authorization. Rotation authorization covers necessary in-scope l
 4. Inventory live processes and tmux panes, including work sharing the same account through different launchers. Process counts are a rough load signal, not a count of model calls or subagents. Select a verified eligible account with runway in every required window; prefer a less-loaded account when it has sufficient runway. Keep independently authenticated standby routes where supported. A cancelled, unverified or 99%-used account is not a healthy destination just because its session counter is low.
 5. If the live check shows no action is needed, acknowledge the incident and end without browser or spreadsheet work. Otherwise finish the bounded intervention or record the concrete unresolved obligation with a deadline and evidence; repeated reminders are not recovery.
 
+## Standby measurements
+
+Keep an independent, fixed-account login route for each subscription so switching the
+last work profile away does not strand its measurements. Use ordinary profile-scoped
+OAuth, complete native first-run onboarding, and prove `/usage` works in a disposable
+probe before registering the route. Auth success alone does not prove unattended
+refresh works. Never copy credentials or use a busy work pane for standby polling.
+
+Size the installed refresh batch and cadence to cover the fleet within the source's
+freshness window. Report missing login, unfinished onboarding, failed refresh and
+scheduled refresh separately from capacity. Alert on a broken standby route even
+while a work profile still supplies fresh readings. The bundled collector reads
+caches; unattended native refresh requires the installed local adapter.
+
+Time to the first switch is not total fleet coverage. When a qualifying natural
+reset precedes that switch, show a potential bridge pending verification. Do not
+claim a purchase is needed solely because the first switch falls inside the work
+block; future resets and spare accounts still need measurement and allocation.
+
 ## Switch and recover
 
 - Capture the target profile, exact account, pane/PID, session identifier, current work/goal, real draft and queued input before mutation. Use configured native account login or an already-approved backend. Confirm the rendered account identity before OAuth authorization. Do not copy bearer tokens between profiles or print credentials, callback codes, or whole process environments.

@@ -4,15 +4,25 @@ const duration = minutes => minutes === null ? 'No estimate' : minutes < 1 ? 'No
 const clock = seconds => seconds == null ? 'Unknown' : new Date(seconds * 1000).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
 const age = seconds => seconds == null ? 'Never measured' : seconds < 0 ? 'Clock mismatch' : seconds < 60 ? `${Math.floor(seconds)}s old` : `${Math.floor(seconds / 60)}m old`;
 let latestData;
+function healthDecision(h, monitorOk, horizon) {
+  const known=h.runway_minutes !== null && monitorOk;
+  const covered=known && h.runway_minutes >= horizon;
+  const reached=known && h.runway_minutes === 0;
+  const reset=h.next_potential_reset;
+  const bridge=known && !reached && reset && reset.minutes <= h.runway_minutes;
+  const title=!monitorOk ? 'Capacity unknown: measurements need refreshing' : !h.active_accounts ? 'No active workload measured' : !known ? 'Capacity unknown: full-speed runway is unverified' : reached ? (h.ready_spares ? 'Switch needed now: verified spare available' : 'At risk now: switch threshold exceeded, no verified spare') : covered ? 'Current allocation covers this work block' : h.ready_spares ? 'Next switch ahead: verified spare available' : bridge ? 'Current capacity should bridge to the next reset' : h.runway_minutes < 15 ? 'At risk soon: less than 15 minutes to switch' : 'Coverage beyond the next switch is unverified';
+  const action=!known ? 'Verify usage and observe the workload before making a purchase decision.' : covered ? 'No additional capacity is indicated for this horizon at the measured pace.' : h.ready_spares ? `Prepare the ${h.ready_spares} verified spare account(s); transfer coverage still needs confirmation.` : bridge ? 'Replacement verification pending. Verify the account after its scheduled reset, then switch before the active account reaches its guard. This does not establish coverage for the entire selected work block or a need to buy another account.' : 'No verified spare is ready. Verify replacement capacity before the next switch.';
+  return {known,covered,reached,bridge,title,action};
+}
 function renderHealth(data) {
   const h=data.health, horizon=Number($('health-horizon').value), panel=$('fleet-health');
   if (!h) return;
-  const known=h.runway_minutes !== null && data.monitor_ok;
-  const covered=known && h.runway_minutes >= horizon;
+  const decision=healthDecision(h,data.monitor_ok,horizon);
+  const {known,covered,bridge}=decision;
   const urgent=known && h.runway_minutes < 15;
   const reached=known && h.runway_minutes === 0;
   panel.className=`fleet-health ${!known ? 'unknown' : covered ? 'covered' : urgent ? 'critical' : 'watch'}`;
-  $('health-title').textContent=!data.monitor_ok ? 'Capacity unknown: measurements need refreshing' : !h.active_accounts ? 'No active workload measured' : !known ? 'Capacity unknown: full-speed runway is unverified' : reached ? (h.ready_spares ? 'At risk now: switch threshold exceeded' : 'At risk now: switch threshold exceeded, no verified spare') : covered ? 'Current allocation covers this work block' : urgent ? 'At risk soon: less than 15 minutes to switch' : 'More capacity needed for this work block';
+  $('health-title').textContent=decision.title;
   $('health-verdict').textContent=reached ? 'An active account is already beyond its switch threshold. Its remaining quota is a buffer, not verified coverage for continued full-speed work.' : known ? `About ${duration(h.runway_minutes)} until the first account reaches its switch guard, at the recent pace. ${h.sample_minutes === null ? "A fresh reading has reached the switch guard." : `Based on a ${Math.round(h.sample_minutes)}-minute sample; this is a short-term projection.`}` : 'A missing, stale or flat rate cannot establish sustained capacity.';
   const bar=$('health-bar'); bar.value=known ? Math.min(100,h.runway_minutes/horizon*100) : 0;
   bar.setAttribute('aria-valuetext',known ? `${Math.round(bar.value)}% of selected horizon before next switch` : 'Unknown coverage');
@@ -24,13 +34,12 @@ function renderHealth(data) {
     ['Next switch', known ? duration(h.runway_minutes) : 'Unknown',h.bottleneck ? `${h.bottleneck.email} · ${h.bottleneck.window}` : 'Two fresh observations needed'],
     ['Ready spares',String(h.ready_spares),`${h.unknown_accounts} accounts need verification`],
     ['Next 5-hour reset with weekly quota remaining',reset ? duration(reset.minutes) : 'Unknown',reset ? `${reset.email} · ${reset.weekly_used}% weekly used at last check · verify after reset` : 'No qualifying five-hour reset established'],
-    ['Fresh-account scenario',extra===null ? 'Not comparable' : extra===0 ? 'None for this block' : `≈ ${extra} more`,h.fresh_account_minutes ? `Each identical fresh account ≈ ${duration(h.fresh_account_minutes)} at this load` : 'Requires one measured account carrying the fleet']]) {
+    ['Hypothetical fresh accounts (resets excluded)',extra===null ? 'Not comparable' : extra===0 ? 'None for this block' : `≈ ${extra} more`,h.fresh_account_minutes ? `Each identical fresh account ≈ ${duration(h.fresh_account_minutes)} at this load` : 'Requires one measured account carrying the fleet']]) {
       const node=make('div',undefined,'health-metric');node.append(make('span',label),make('b',value),make('small',note));metrics.append(node);
   }
-  let action=!known ? 'Verify usage and observe the workload before making a purchase decision.' : covered ? 'No additional capacity is indicated for this horizon at the measured pace.' : h.ready_spares ? `Prepare the ${h.ready_spares} verified spare account(s); their quota sizes and transfer coverage are not assumed here.` : 'No verified spare is ready. Prepare additional capacity before the next switch.';
-  if(known && !covered && h.unknown_accounts) action+=' Verify the unknown accounts before buying another.';
+  let action=decision.action;
+  if(known && !covered && !bridge && h.unknown_accounts) action+=' Verify the unknown accounts before buying another.';
   if(known && reset && reset.minutes>h.runway_minutes) action+=` The next potential reset is ${duration(reset.minutes-h.runway_minutes)} beyond current runway.`;
-  if(known && reset && reset.minutes<=h.runway_minutes) action+=' A scheduled reset may bridge the gap, but needs a fresh reading.';
   $('health-action').textContent=action;
   $('health-assumptions').textContent=`${h.assumptions} The bar measures time before the first switch, not a sum of account percentages. Ready spares are listed separately. The scenario excludes future natural resets and existing spares; it is a capacity estimate, not a purchase instruction. Short rate samples can change quickly. ${h.reference_account ? 'Reference: '+h.reference_account+'.' : ''}`;
 }
@@ -58,6 +67,13 @@ function render(data) {
     const card=make('article',undefined,`account ${account.state}`);
     const top=make('div',undefined,'account-top'); top.append(make('h3',account.email),make('span',account.state.replaceAll('_',' '),'state')); card.append(top);
     const meta=make('div',undefined,'meta'); meta.append(make('span',`${account.profiles.join(' · ') || 'Standby'} · ${account.process_count ?? '?'} processes`),make('span',age(account.age_seconds))); card.append(meta);
+    if (account.verification) {
+      const v=account.verification;
+      const info=make('p',undefined,'verification');
+      info.append(make('strong',`Standby checks: ${v.state.replaceAll('_',' ')}. `),document.createTextNode(v.reason));
+      if(v.last_attempt_at) info.append(make('small',` Last check ${clock(v.last_attempt_at)}${v.last_result ? ' · '+v.last_result.replaceAll('_',' ') : ''}`));
+      card.append(info);
+    }
     for (const window of account.windows) {
       const section=make('div',undefined,`window${!window.fresh ? ' stale' : window.used >= window.threshold ? ' warn' : ''}`);
       const title=make('div',undefined,'window-title'); title.append(make('span',window.name==='session' ? 'Five-hour window' : window.name==='weekly' ? 'Weekly' : window.name), make('b',window.used === null ? 'Unknown' : `${window.used}%${window.fresh ? '' : ' · stale'}`));
