@@ -104,5 +104,74 @@ class DashboardTests(unittest.TestCase):
                 server.server_close()
 
 
+class FleetHealthTests(unittest.TestCase):
+    def health(self, data=None, now=NOW):
+        return d.dashboard_view(data or state(), now)['health']
+
+    def test_runway_and_identical_account_scenario_use_guards(self):
+        h=self.health(now=NOW+120)
+        self.assertEqual(h['runway_minutes'],18)
+        self.assertEqual(h['fresh_account_minutes'],80)
+        self.assertFalse(h['banked_resets_included'])
+
+    def test_reached_guard_is_urgent_even_without_a_rate(self):
+        data=state();data['rate_baselines']={}
+        data['accounts'][A]['limits']['session']['used']=81
+        h=self.health(data)
+        self.assertEqual(h['runway_minutes'],0)
+        self.assertIsNone(h['fresh_account_minutes'])
+
+    def test_weekly_wall_limits_fresh_session(self):
+        data=state()
+        data['accounts'][A]=sample(session=10,weekly=84)
+        data['rate_baselines'][A]=sample(session=0,weekly=74,observed=NOW-600)
+        h=self.health(data)
+        self.assertEqual(h['runway_minutes'],1)
+        self.assertEqual(h['bottleneck']['window'],'weekly')
+
+    def test_unknown_and_stale_accounts_cannot_reassure(self):
+        data=state()
+        data['capacity']['unknown@example.com']={'state':'quota_unknown','profiles':[]}
+        self.assertEqual(self.health(data)['ready_spares'],0)
+        self.assertEqual(self.health(data)['unknown_accounts'],1)
+        self.assertIsNone(self.health(data,NOW+901)['runway_minutes'])
+        self.assertIsNone(self.health(data,NOW+601)['runway_minutes'])
+
+    def test_missing_or_flat_rate_is_unknown_not_infinite(self):
+        for baseline in ({}, {A:sample(session=60)}):
+            data=state();data['rate_baselines']=baseline
+            self.assertIsNone(self.health(data)['runway_minutes'])
+        data=state();data['rate_baselines'][A]=sample(session=60,observed=NOW-600)
+        self.assertIsNone(self.health(data)['runway_minutes'])
+
+    def test_multiple_plan_accounts_are_never_pooled_for_purchase(self):
+        data=state();b='second@example.com'
+        data['accounts'][b]=sample(email=b,session=75)
+        data['rate_baselines'][b]=sample(email=b,session=65,observed=NOW-600)
+        data['capacity'][b]={'state':'available','profiles':['second'],'process_count':1}
+        h=self.health(data)
+        self.assertEqual(h['runway_minutes'],5)
+        self.assertIsNone(h['fresh_account_minutes'])
+        self.assertEqual(h['active_accounts'],2)
+
+    def test_one_unmeasured_active_account_invalidates_full_fleet_estimate(self):
+        data=state();data['capacity']['unknown@example.com']={'state':'quota_unknown','profiles':['second']}
+        self.assertIsNone(self.health(data)['runway_minutes'])
+
+    def test_reset_is_potential_not_banked_capacity(self):
+        data=state()
+        for key in ['accounts','rate_baselines']:
+            data[key][A]['limits']['session']['reset']=NOW+60
+        h=self.health(data)
+        self.assertEqual(h['runway_minutes'],20)
+        self.assertEqual(h['next_potential_reset']['minutes'],1)
+        self.assertTrue(h['next_potential_reset']['verification_required'])
+
+    def test_session_reset_does_not_clear_a_weekly_wall(self):
+        data=state();data['accounts'][A]['limits']['weekly']['used']=99
+        h=self.health(data)
+        self.assertEqual(h['next_potential_reset']['at'],NOW+86400)
+
+
 if __name__ == '__main__':
     unittest.main()

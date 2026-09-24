@@ -19,6 +19,79 @@ def epoch(value):
         return None
 
 
+def fleet_health(rows, now, monitor_ok):
+    """Current allocation runway; never add percentages across different accounts.
+
+    Fresh-account scenarios are available only when one account carries the fleet,
+    so its measured rates define an unambiguous same-size reference account.
+    Natural resets are opportunities to verify, not credited future capacity.
+    """
+    active = [r for r in rows if r["profiles"] or (r.get("process_count") or 0) > 0]
+    ready = [r for r in rows if r not in active and r["state"] == "available"]
+    unknown = [r for r in rows if r["state"].endswith("unknown")]
+    forecasts = []
+    incomplete = []
+    for row in active:
+        windows = row["windows"]
+        if (row["state"].endswith("unknown") or not windows
+                or any(not w["fresh"] or w["rate_per_minute"] is None for w in windows)):
+            incomplete.append(row["email"])
+            continue
+        # Do not count a scheduled reset until a fresh post-reset sample exists.
+        candidates = [w for w in windows if w["minutes_to_threshold"] is not None]
+        if not candidates:
+            incomplete.append(row["email"])
+            continue
+        limiting = min(candidates, key=lambda w: w["minutes_to_threshold"])
+        forecasts.append({"email": row["email"], "window": limiting["name"],
+                          "minutes": limiting["minutes_to_threshold"]})
+    bottleneck = min(forecasts, key=lambda f: f["minutes"]) if forecasts else None
+    complete = monitor_ok and bool(active) and not incomplete
+    runway = bottleneck["minutes"] if bottleneck and complete else None
+    reached = [{"email": r["email"], "window": w["name"], "minutes": 0}
+               for r in active for w in r["windows"]
+               if w["fresh"] and w["used"] >= w["threshold"]]
+    if reached and monitor_ok:
+        runway, bottleneck = 0, reached[0]
+    fresh_minutes = None
+    reference = None
+    if complete and len(active) == 1:
+        reference = active[0]["email"]
+        durations = [w["threshold"] / w["rate_per_minute"]
+                     for w in active[0]["windows"] if w["rate_per_minute"] > 0]
+        fresh_minutes = min(durations) if durations else None
+    # A reset can free an account only if every other window is below its guard.
+    # Old readings may identify a potential reset, but cannot verify its capacity.
+    opportunities = []
+    for row in rows:
+        if row["state"] == "eligibility_unknown":
+            continue
+        for window in row["windows"]:
+            if not window["reset"] or window["reset"] <= now:
+                continue
+            others = [w for w in row["windows"] if w is not window]
+            if any(w["used"] is None or (w["used"] >= w["threshold"]
+                    and w["reset"] != window["reset"]) for w in others):
+                continue
+            if window["used"] is None:
+                continue
+            opportunities.append({"email": row["email"], "at": window["reset"],
+                                  "minutes": (window["reset"] - now) / 60,
+                                  "verification_required": True})
+    next_reset = min(opportunities, key=lambda x: x["at"]) if opportunities else None
+    return {"runway_minutes": runway, "bottleneck": bottleneck,
+            "active_accounts": len(active), "ready_spares": len(ready),
+            "unknown_accounts": len(unknown), "incomplete_accounts": incomplete,
+            "fresh_account_minutes": fresh_minutes, "reference_account": reference,
+            "sample_minutes": min((w["sample_minutes"] for r in active for w in r["windows"]
+                                   if w["sample_minutes"] is not None), default=None),
+            "next_potential_reset": next_reset, "forecast_complete": complete,
+            "banked_resets_included": False,
+            "assumptions": "Recent measured pace; current allocation; switch at guards. "
+            "No future resets, unknown accounts or banked credits counted. "
+            "Extra-account scenarios assume a fresh account with the same quota as the reference."}
+
+
 def dashboard_view(state, now, max_age=900, obligations=None, session_threshold=80, other_threshold=85):
     """Support both this package's state and the original six-profile monitor."""
     checked = epoch(state.get("checked_at"))
@@ -75,6 +148,7 @@ def dashboard_view(state, now, max_age=900, obligations=None, session_threshold=
                for key, item in tasks.items() if item.get("state") not in ("recovered", "cancelled")]
     return {"served_at": now, "checked_at": checked, "monitor_ok": monitor_ok,
             "monitor_age_seconds": heartbeat_age, "accounts": rows, "obligations": pending,
+            "health": fleet_health(rows, now, monitor_ok),
             "events": state.get("events", []), "notification_succeeded": state.get("notification_succeeded", state.get("queued")),
             "notification_error": state.get("notification_error"), "page_refresh_seconds": 5,
             "measurement_max_age_seconds": max_age, "session_threshold": session_threshold,

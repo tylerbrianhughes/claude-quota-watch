@@ -48,6 +48,10 @@ Open http://127.0.0.1:8767. It binds only to loopback and requires no Python dep
 
 Forecasts use two distinct observations from the same account and window; they expire with the underlying data. They estimate quota use, not API dollars or tokens. Plan percentages are not interchangeable across accounts. Supply `--session-threshold` and `--other-threshold` if your monitor uses nondefault thresholds. See the [architecture](docs/architecture.md).
 
+The top health bar compares the current allocation's measured runway with a selected 1–24 hour work horizon. It shows the first switch guard, verified standby count, and next potential natural reset. It does not add percentages across plans or credit a future reset before verification. Missing or flat rate samples produce unknown coverage; a stale monitor removes the health forecast.
+
+When a single account carries the fleet, a separate scenario estimates how many additional fresh accounts **with that same quota size** would cover the selected horizon at the recent pace. Existing spares, future resets and banked credits are excluded from that scenario; verify them before buying. With multiple active accounts, quota sizes are not inferred and the fresh-account scenario is unavailable. This is a short-window extrapolation, not a promise of monthly capacity.
+
 ## Limits
 
 The collector uses an internal Claude cache schema, which can change. It invokes native `claude auth status` and reads selected cache fields; it does not refresh usage automatically, manage tokens, provide an authentication proxy, or implement a notification transport. Stale usage prompts the recovery agent to perform a native refresh. Subscription eligibility is supplied and expires explicitly.

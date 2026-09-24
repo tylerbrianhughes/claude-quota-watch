@@ -1,9 +1,42 @@
 const $ = id => document.getElementById(id);
 const make = (tag, text, cls) => { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; };
-const duration = minutes => minutes === null ? 'No estimate' : minutes < 1 ? 'Now' : minutes < 60 ? `${Math.round(minutes)} min` : `${Math.floor(minutes / 60)}h ${Math.round(minutes % 60)}m`;
+const duration = minutes => minutes === null ? 'No estimate' : minutes < 1 ? 'Now' : Math.round(minutes) < 60 ? `${Math.round(minutes)} min` : `${Math.floor(Math.round(minutes) / 60)}h ${Math.round(minutes) % 60}m`;
 const clock = seconds => seconds == null ? 'Unknown' : new Date(seconds * 1000).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
 const age = seconds => seconds == null ? 'Never measured' : seconds < 0 ? 'Clock mismatch' : seconds < 60 ? `${Math.floor(seconds)}s old` : `${Math.floor(seconds / 60)}m old`;
+let latestData;
+function renderHealth(data) {
+  const h=data.health, horizon=Number($('health-horizon').value), panel=$('fleet-health');
+  if (!h) return;
+  const known=h.runway_minutes !== null && data.monitor_ok;
+  const covered=known && h.runway_minutes >= horizon;
+  const urgent=known && h.runway_minutes < 15;
+  panel.className=`fleet-health ${!known ? 'unknown' : covered ? 'covered' : urgent ? 'critical' : 'watch'}`;
+  $('health-title').textContent=!data.monitor_ok ? 'Measurements need refreshing' : !h.active_accounts ? 'No active workload measured' : !known ? 'Full-speed runway is not yet verified' : covered ? 'Current allocation covers this work block' : urgent ? 'Capacity intervention needed soon' : 'More capacity needed for this work block';
+  $('health-verdict').textContent=known ? `About ${duration(h.runway_minutes)} until the first account reaches its switch guard, at the recent pace. ${h.sample_minutes === null ? "A fresh reading has reached the switch guard." : `Based on a ${Math.round(h.sample_minutes)}-minute sample; this is a short-term projection.`}` : 'A missing, stale or flat rate cannot establish sustained capacity.';
+  const bar=$('health-bar'); bar.value=known ? Math.min(100,h.runway_minutes/horizon*100) : 0;
+  bar.setAttribute('aria-valuetext',known ? `${Math.round(bar.value)}% of selected horizon before next switch` : 'Unknown coverage');
+  $('health-scale').replaceChildren(make('span',known ? `${duration(h.runway_minutes)} measured-rate runway` : 'Coverage unknown'),make('span',`${duration(horizon)} target`));
+  const metrics=$('health-metrics'); metrics.replaceChildren();
+  const extra=known && h.fresh_account_minutes > 0 ? Math.ceil(Math.max(0,horizon-h.runway_minutes)/h.fresh_account_minutes) : null;
+  const reset=h.next_potential_reset;
+  for(const [label,value,note] of [
+    ['Next switch', known ? duration(h.runway_minutes) : 'Unknown',h.bottleneck ? `${h.bottleneck.email} · ${h.bottleneck.window}` : 'Two fresh observations needed'],
+    ['Ready spares',String(h.ready_spares),`${h.unknown_accounts} accounts need verification`],
+    ['Potential reset',reset ? duration(reset.minutes) : 'Unknown',reset ? `${reset.email} · verify after reset` : 'No usable reset schedule established'],
+    ['Fresh-account scenario',extra===null ? 'Not comparable' : extra===0 ? 'None for this block' : `≈ ${extra} more`,h.fresh_account_minutes ? `Each identical fresh account ≈ ${duration(h.fresh_account_minutes)} at this load` : 'Requires one measured account carrying the fleet']]) {
+      const node=make('div',undefined,'health-metric');node.append(make('span',label),make('b',value),make('small',note));metrics.append(node);
+  }
+  let action=!known ? 'Verify usage and observe the workload before making a purchase decision.' : covered ? 'No additional capacity is indicated for this horizon at the measured pace.' : h.ready_spares ? `Prepare the ${h.ready_spares} verified spare account(s); their quota sizes and transfer coverage are not assumed here.` : 'No verified spare is ready. Prepare additional capacity before the next switch.';
+  if(known && !covered && h.unknown_accounts) action+=' Verify the unknown accounts before buying another.';
+  if(known && reset && reset.minutes>h.runway_minutes) action+=` The next potential reset is ${duration(reset.minutes-h.runway_minutes)} beyond current runway.`;
+  if(known && reset && reset.minutes<=h.runway_minutes) action+=' A scheduled reset may bridge the gap, but needs a fresh reading.';
+  $('health-action').textContent=action;
+  $('health-assumptions').textContent=`${h.assumptions} The bar measures time before the first switch, not a sum of account percentages. Ready spares are listed separately. The scenario excludes future natural resets and existing spares; it is a capacity estimate, not a purchase instruction. Short rate samples can change quickly. ${h.reference_account ? 'Reference: '+h.reference_account+'.' : ''}`;
+}
+$('health-horizon').addEventListener('change',()=>{if(latestData)renderHealth(latestData);});
 function render(data) {
+  latestData=data;
+  renderHealth(data);
   $('error').hidden = true;
   const heartbeat = $('heartbeat');
   heartbeat.textContent = data.monitor_ok ? `Monitor checked ${age(data.monitor_age_seconds)}` : `Monitor overdue · ${age(data.monitor_age_seconds)}`;
@@ -44,7 +77,7 @@ function render(data) {
 }
 async function refresh() {
   try { const result=await fetch('/api/status',{cache:'no-store',signal:AbortSignal.timeout(4000)}); if(!result.ok) throw new Error('Snapshot unavailable'); render(await result.json()); }
-  catch(error) { $('error').hidden=false; $('error').textContent='Dashboard data unavailable. Values below may be stale. Retrying automatically.'; $('heartbeat').textContent='Connection lost'; $('heartbeat').className='badge warn'; }
+  catch(error) { $('error').hidden=false; $('error').textContent='Dashboard data unavailable. Values below may be stale. Retrying automatically.'; $('heartbeat').textContent='Connection lost'; $('heartbeat').className='badge warn'; $('fleet-health').className='fleet-health unknown'; $('health-title').textContent='Live health unavailable'; $('health-verdict').textContent='Connection lost. Previous forecasts are stale.'; $('health-bar').value=0; $('health-scale').replaceChildren(); $('health-metrics').replaceChildren(); $('health-action').textContent='Wait for fresh measurements before relying on a capacity estimate.'; latestData=null; }
   finally { setTimeout(refresh,5000); }
 }
 refresh();
