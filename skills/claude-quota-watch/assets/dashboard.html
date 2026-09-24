@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Quota Fleet</title><link rel="stylesheet" href="/dashboard.css"><script src="/dashboard.js" defer></script></head>
+<body><main>
+<header><div><p class="eyebrow">CLAUDE QUOTA WATCH</p><h1>Your fleet, in view.</h1><p class="subtitle">Measured capacity. Visible recovery. No model calls to refresh this page.</p></div><div id="heartbeat" class="badge">Connecting…</div></header>
+<div id="error" role="alert" hidden></div>
+<section class="summary" aria-label="Fleet summary" id="summary"></section>
+<div class="section-title"><h2>Account capacity</h2><span id="updated">Waiting for snapshot</span></div>
+<section id="accounts" class="accounts" aria-label="Accounts"></section>
+<section class="forecast-note"><strong>Reading the forecast</strong><p>Burn rate is percentage points per minute within each account’s own quota window. Estimates use two distinct observations, subtract the age of the latest reading, and assume the same workload continues. Quotas differ between plans, so percentages are not added into a fleet total or converted into dollars. “No estimate” means insufficient evidence, not unlimited capacity.</p></section>
+<div class="section-title"><h2>Recovery still owed</h2><span>Login ≠ live adoption</span></div><section id="obligations" class="obligations"></section>
+<footer><strong>5-second page refresh · scheduled quota measurements</strong><p>Page refreshes only read local JSON. Measurement age appears on every account; a stopped monitor is shown explicitly. Switching and recovery may wake an agent. No automatic resets or refills.</p></footer>
+</main></body></html>
