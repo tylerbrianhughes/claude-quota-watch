@@ -10,9 +10,10 @@ function renderHealth(data) {
   const known=h.runway_minutes !== null && data.monitor_ok;
   const covered=known && h.runway_minutes >= horizon;
   const urgent=known && h.runway_minutes < 15;
+  const reached=known && h.runway_minutes === 0;
   panel.className=`fleet-health ${!known ? 'unknown' : covered ? 'covered' : urgent ? 'critical' : 'watch'}`;
-  $('health-title').textContent=!data.monitor_ok ? 'Measurements need refreshing' : !h.active_accounts ? 'No active workload measured' : !known ? 'Full-speed runway is not yet verified' : covered ? 'Current allocation covers this work block' : urgent ? 'Capacity intervention needed soon' : 'More capacity needed for this work block';
-  $('health-verdict').textContent=known ? `About ${duration(h.runway_minutes)} until the first account reaches its switch guard, at the recent pace. ${h.sample_minutes === null ? "A fresh reading has reached the switch guard." : `Based on a ${Math.round(h.sample_minutes)}-minute sample; this is a short-term projection.`}` : 'A missing, stale or flat rate cannot establish sustained capacity.';
+  $('health-title').textContent=!data.monitor_ok ? 'Capacity unknown: measurements need refreshing' : !h.active_accounts ? 'No active workload measured' : !known ? 'Capacity unknown: full-speed runway is unverified' : reached ? (h.ready_spares ? 'At risk now: switch threshold exceeded' : 'At risk now: switch threshold exceeded, no verified spare') : covered ? 'Current allocation covers this work block' : urgent ? 'At risk soon: less than 15 minutes to switch' : 'More capacity needed for this work block';
+  $('health-verdict').textContent=reached ? 'An active account is already beyond its switch threshold. Its remaining quota is a buffer, not verified coverage for continued full-speed work.' : known ? `About ${duration(h.runway_minutes)} until the first account reaches its switch guard, at the recent pace. ${h.sample_minutes === null ? "A fresh reading has reached the switch guard." : `Based on a ${Math.round(h.sample_minutes)}-minute sample; this is a short-term projection.`}` : 'A missing, stale or flat rate cannot establish sustained capacity.';
   const bar=$('health-bar'); bar.value=known ? Math.min(100,h.runway_minutes/horizon*100) : 0;
   bar.setAttribute('aria-valuetext',known ? `${Math.round(bar.value)}% of selected horizon before next switch` : 'Unknown coverage');
   $('health-scale').replaceChildren(make('span',known ? `${duration(h.runway_minutes)} measured-rate runway` : 'Coverage unknown'),make('span',`${duration(horizon)} target`));
@@ -22,7 +23,7 @@ function renderHealth(data) {
   for(const [label,value,note] of [
     ['Next switch', known ? duration(h.runway_minutes) : 'Unknown',h.bottleneck ? `${h.bottleneck.email} · ${h.bottleneck.window}` : 'Two fresh observations needed'],
     ['Ready spares',String(h.ready_spares),`${h.unknown_accounts} accounts need verification`],
-    ['Potential reset',reset ? duration(reset.minutes) : 'Unknown',reset ? `${reset.email} · verify after reset` : 'No usable reset schedule established'],
+    ['Next 5-hour reset with weekly quota remaining',reset ? duration(reset.minutes) : 'Unknown',reset ? `${reset.email} · ${reset.weekly_used}% weekly used at last check · verify after reset` : 'No qualifying five-hour reset established'],
     ['Fresh-account scenario',extra===null ? 'Not comparable' : extra===0 ? 'None for this block' : `≈ ${extra} more`,h.fresh_account_minutes ? `Each identical fresh account ≈ ${duration(h.fresh_account_minutes)} at this load` : 'Requires one measured account carrying the fleet']]) {
       const node=make('div',undefined,'health-metric');node.append(make('span',label),make('b',value),make('small',note));metrics.append(node);
   }

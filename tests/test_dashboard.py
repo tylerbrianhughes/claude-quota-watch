@@ -170,7 +170,18 @@ class FleetHealthTests(unittest.TestCase):
     def test_session_reset_does_not_clear_a_weekly_wall(self):
         data=state();data['accounts'][A]['limits']['weekly']['used']=99
         h=self.health(data)
-        self.assertEqual(h['next_potential_reset']['at'],NOW+86400)
+        self.assertIsNone(h['next_potential_reset'])
+
+    def test_reset_metric_selects_only_session_not_earlier_weekly_reset(self):
+        data=state()
+        data['accounts'][A]['limits']['weekly']['reset']=NOW+60
+        h=self.health(data)
+        self.assertEqual(h['next_potential_reset']['at'], data['accounts'][A]['limits']['session']['reset'])
+
+    def test_fable_wall_excludes_session_reset_even_at_same_time(self):
+        data=state()
+        data['accounts'][A]['limits']['fable']={'used':99,'reset':data['accounts'][A]['limits']['session']['reset'],'fresh':True}
+        self.assertIsNone(self.health(data)['next_potential_reset'])
 
 
 if __name__ == '__main__':

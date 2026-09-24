@@ -60,23 +60,28 @@ def fleet_health(rows, now, monitor_ok):
         durations = [w["threshold"] / w["rate_per_minute"]
                      for w in active[0]["windows"] if w["rate_per_minute"] > 0]
         fresh_minutes = min(durations) if durations else None
-    # A reset can free an account only if every other window is below its guard.
+    # This metric is specifically a five-hour reset with weekly/model headroom.
     # Old readings may identify a potential reset, but cannot verify its capacity.
     opportunities = []
     for row in rows:
         if row["state"] == "eligibility_unknown":
             continue
         for window in row["windows"]:
+            if window["name"] != "session":
+                continue
             if not window["reset"] or window["reset"] <= now:
                 continue
             others = [w for w in row["windows"] if w is not window]
-            if any(w["used"] is None or (w["used"] >= w["threshold"]
-                    and w["reset"] != window["reset"]) for w in others):
+            if not any(w["name"] == "weekly" for w in others):
+                continue
+            if any(w["used"] is None or w["used"] >= w["threshold"]
+                    or (w["reset"] is not None and w["reset"] <= now) for w in others):
                 continue
             if window["used"] is None:
                 continue
             opportunities.append({"email": row["email"], "at": window["reset"],
                                   "minutes": (window["reset"] - now) / 60,
+                                  "weekly_used": next(w["used"] for w in others if w["name"] == "weekly"),
                                   "verification_required": True})
     next_reset = min(opportunities, key=lambda x: x["at"]) if opportunities else None
     return {"runway_minutes": runway, "bottleneck": bottleneck,
