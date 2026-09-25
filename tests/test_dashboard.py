@@ -22,6 +22,21 @@ def state():
 
 
 class DashboardTests(unittest.TestCase):
+    def test_banked_reset_counts_are_recorded_not_available_runway(self):
+        baseline=d.dashboard_view(state(),NOW)
+        for count in (0,1,3):
+            inventory={'accounts':{A:{'count':count,'observed_at':NOW-3600,'source':'Quota sheet'}}}
+            view=d.dashboard_view(state(),NOW,banked_resets=inventory)
+            row=view['accounts'][0]
+            self.assertEqual(row['banked_resets'],count)
+            self.assertEqual(row['banked_resets_observed_at'],NOW-3600)
+            self.assertEqual(view['health'],baseline['health'])
+        for count in (None,'',-1,1.5,True,'1'):
+            row=d.dashboard_view(state(),NOW,banked_resets={'accounts':{A:{'count':count}}})['accounts'][0]
+            self.assertIsNone(row['banked_resets'])
+        for inventory in (None,[],{'accounts':[]},{'accounts':{A:None}}):
+            self.assertIsNone(d.dashboard_view(state(),NOW,banked_resets=inventory)['accounts'][0]['banked_resets'])
+
     def test_verification_blocker_is_visible_separately_from_capacity(self):
         data=state()
         data['capacity'][A]['verification']={'state':'missing_route','reason':'No independent standby login configured.'}
@@ -153,6 +168,10 @@ const names=sort=>Array.from(ctx.sortedAccounts(rows,sort),r=>r.email);
 assert.deepEqual(names({key:'session',direction:'asc'}),['spare','healthy','busy','spent','unknown']);
 assert.deepEqual(names({key:'session',direction:'desc'}),['spent','busy','healthy','spare','unknown']);
 assert.deepEqual(names({key:'priority',direction:'asc'}),['busy','healthy','spare','unknown','spent']);
+rows[0].banked_resets=1;rows[1].banked_resets=0;
+assert.deepEqual(names({key:'banked_resets',direction:'asc'}).slice(0,2),['busy','spare']);
+rows[0].windows.push({name:'weekly',reset:200});rows[1].windows.push({name:'weekly',reset:100});
+assert.deepEqual(names({key:'weekly_reset',direction:'asc'}).slice(0,2),['busy','spare']);
 assert.equal(rows[0].email,'spare'); // Rendering must not reorder the source snapshot.
 """
         subprocess.run(['node','-e',js,str(asset)],check=True)

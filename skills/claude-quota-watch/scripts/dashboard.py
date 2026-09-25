@@ -97,12 +97,15 @@ def fleet_health(rows, now, monitor_ok):
             "Extra-account scenarios assume a fresh account with the same quota as the reference."}
 
 
-def dashboard_view(state, now, max_age=900, obligations=None, session_threshold=80, other_threshold=85):
+def dashboard_view(state, now, max_age=900, obligations=None, session_threshold=80, other_threshold=85, banked_resets=None):
     """Support both this package's state and the original six-profile monitor."""
     checked = epoch(state.get("checked_at"))
     heartbeat_age = now - checked if checked is not None else None
     monitor_ok = heartbeat_age is not None and 0 <= heartbeat_age <= 600
     rows = []
+    recorded = banked_resets.get("accounts", {}) if isinstance(banked_resets, dict) else {}
+    if not isinstance(recorded, dict):
+        recorded = {}
     baselines = state.get("baselines", state.get("rate_baselines", {}))
     for email in sorted(set(state.get("capacity", {})) | set(state.get("accounts", {}))):
         account = state.get("accounts", {}).get(email, {})
@@ -142,7 +145,15 @@ def dashboard_view(state, now, max_age=900, obligations=None, session_threshold=
             status = "constrained"
         profiles = capacity.get("profiles", [name for name, a in state.get("aliases", {}).items() if a.get("email") == email])
         candidates = [x["minutes_to_threshold"] for x in windows if x["minutes_to_threshold"] is not None and not x["reset_before_threshold"]]
-        rows.append({"email": email, "state": status, "profiles": profiles,
+        banked = recorded.get(email, {})
+        if not isinstance(banked, dict):
+            banked = {}
+        count = banked.get("count")
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+            count = None
+        rows.append({"banked_resets": count,
+                     "banked_resets_observed_at": epoch(banked.get("observed_at")),
+                     "banked_resets_source": banked.get("source"), "email": email, "state": status, "profiles": profiles,
                      "verification": capacity.get("verification"),
                      "process_count": capacity.get("process_count"), "observed_at": observed,
                      "age_seconds": age, "windows": windows,
@@ -161,7 +172,7 @@ def dashboard_view(state, now, max_age=900, obligations=None, session_threshold=
             "other_threshold": other_threshold}
 
 
-def handler_for(status_path, obligations_path=None, max_age=900, session_threshold=80, other_threshold=85):
+def handler_for(status_path, obligations_path=None, max_age=900, session_threshold=80, other_threshold=85, banked_resets_path=None):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             # Loopback binding plus Host validation prevents DNS rebinding reads.
@@ -173,7 +184,11 @@ def handler_for(status_path, obligations_path=None, max_age=900, session_thresho
                 try:
                     state = read_json(status_path)
                     obligations = read_json(obligations_path) if obligations_path else None
-                    payload = dashboard_view(state, time.time(), max_age, obligations, session_threshold, other_threshold)
+                    try:
+                        banked = read_json(banked_resets_path) if banked_resets_path else None
+                    except (OSError, ValueError):
+                        banked = None
+                    payload = dashboard_view(state, time.time(), max_age, obligations, session_threshold, other_threshold, banked)
                     body = json.dumps(payload, allow_nan=False).encode()
                 except (OSError, ValueError, TypeError, AttributeError):
                     self.respond(503, b'{"error":"Snapshot unavailable or invalid; retrying"}', "application/json")
@@ -205,6 +220,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--status", type=Path, required=True)
     parser.add_argument("--obligations", type=Path)
+    parser.add_argument("--banked-resets", type=Path, help="Read-only JSON inventory of recorded banked reset counts")
     parser.add_argument("--port", type=int, default=8767)
     parser.add_argument("--max-age", type=int, default=900)
     parser.add_argument("--session-threshold", type=float, default=80)
@@ -212,7 +228,7 @@ def main():
     args = parser.parse_args()
     if args.max_age <= 0 or not 0 < args.session_threshold <= 100 or not 0 < args.other_threshold <= 100:
         parser.error("Use a positive age and thresholds between 0 and 100")
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(args.status.expanduser(), args.obligations.expanduser() if args.obligations else None, args.max_age, args.session_threshold, args.other_threshold))
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(args.status.expanduser(), args.obligations.expanduser() if args.obligations else None, args.max_age, args.session_threshold, args.other_threshold, args.banked_resets.expanduser() if args.banked_resets else None))
     print(f"Quota fleet dashboard: http://127.0.0.1:{server.server_port}", flush=True)
     server.serve_forever()
 

@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id);
 const make = (tag, text, cls) => { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; };
-const duration = minutes => minutes === null ? 'No estimate' : minutes < 1 ? 'Now' : Math.round(minutes) < 60 ? `${Math.round(minutes)} min` : `${Math.floor(Math.round(minutes) / 60)}h ${Math.round(minutes) % 60}m`;
+const duration = minutes => minutes === null ? 'No estimate' : minutes < 1 ? 'Now' : Math.round(minutes) < 60 ? `${Math.round(minutes)} min` : minutes >= 1440 ? `${Math.floor(minutes / 1440)}d ${Math.floor(minutes % 1440 / 60)}h` : `${Math.floor(Math.round(minutes) / 60)}h ${Math.round(minutes) % 60}m`;
 const clock = seconds => seconds == null ? 'Unknown' : new Date(seconds * 1000).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
 const age = seconds => seconds == null ? 'Never measured' : seconds < 0 ? 'Clock mismatch' : seconds < 60 ? `${Math.floor(seconds)}s old` : `${Math.floor(seconds / 60)}m old`;
 let latestData;
@@ -73,6 +73,7 @@ function render(data) {
 const columns = [
   ['email','Account'], ['state','Status'], ['session','Five-hour'],
   ['weekly','Weekly'], ['fable','Fable'], ['reset','5h reset'],
+  ['weekly_reset','Weekly reset'], ['banked_resets','Banked resets'],
   ['switch','Switch guard'], ['processes','Processes'], ['observed','Verified']
 ];
 let accountSort = {key:'priority',direction:'asc'};
@@ -83,6 +84,7 @@ const activeAccount = account => account.profiles.length>0 || account.process_co
 function sortValue(account,key) {
   if (['session','weekly','fable'].includes(key)) return windowFor(account,key)?.used ?? null;
   if(key==='reset') return windowFor(account,'session')?.reset ?? null;
+  if(key==='weekly_reset') return windowFor(account,'weekly')?.reset ?? null;
   if(key==='switch') return account.state.endsWith('unknown') ? null : account.minutes_to_first_threshold;
   if(key==='processes') return account.process_count;
   if(key==='observed') return account.observed_at;
@@ -149,10 +151,15 @@ function renderAccounts(rows) {
       if(w && !w.fresh && w.used!=null) cell.append(make('small','Stale'));
       tr.append(cell);
     }
-    const reset=windowFor(account,'session')?.reset;
-    const resetCell=make('td',undefined,'reset-cell');resetCell.append(make('span',reset ? clock(reset) : 'Not started / unknown'));
-    if(reset) resetCell.append(make('small',reset*1000<=Date.now() ? 'Refresh needed' : `in ${duration((reset*1000-Date.now())/60000)}`));
-    tr.append(resetCell);
+    for(const kind of ['session','weekly']) {
+      const reset=windowFor(account,kind)?.reset;
+      const resetCell=make('td',undefined,'reset-cell');resetCell.append(make('span',reset ? clock(reset) : 'Not started / unknown'));
+      if(reset) resetCell.append(make('small',reset*1000<=Date.now() ? 'Refresh needed' : `in ${duration((reset*1000-Date.now())/60000)}`));
+      tr.append(resetCell);
+    }
+    const banked=make('td',String(account.banked_resets ?? 'Unknown'),'banked-cell');
+    banked.title=account.banked_resets_observed_at ? `Recorded ${clock(account.banked_resets_observed_at)} · ${account.banked_resets_source || 'inventory'} · explicit authorization required to use` : 'Count not recorded; unknown is not zero';
+    tr.append(banked);
     tr.append(make('td',account.state.endsWith('unknown') ? 'Verify capacity' : account.minutes_to_first_threshold===0 && !activeAccount(account) ? 'At guard' : duration(account.minutes_to_first_threshold),'switch-cell'));
     tr.append(make('td',String(account.process_count ?? '?'),'numeric'));
     const verified=make('td',age(account.age_seconds),'verified-cell');verified.title=clock(account.observed_at);tr.append(verified);body.append(tr);
@@ -177,6 +184,7 @@ function renderAccounts(rows) {
       section.append(title,bar,details,forecast); card.append(section);
     }
 
+    card.append(make('p',`Banked resets: ${account.banked_resets ?? 'Unknown'}. ${account.banked_resets_observed_at ? 'Recorded '+clock(account.banked_resets_observed_at)+' from '+(account.banked_resets_source || 'inventory')+'. ' : ''}Blank records are unknown. Use requires explicit authorization; banked resets are excluded from runway.`, 'verification'));
     const tasks=(latestData?.obligations || []).filter(o=>account.profiles.some(p=>o.id===p || o.id.startsWith(p+'_')));
     for(const task of tasks) card.append(make('p',`${task.id}: ${task.reason}`,'verification'));
     cell.append(card);detail.append(cell);body.append(detail);

@@ -44,6 +44,14 @@ python3 skills/claude-quota-watch/scripts/dashboard.py \
   --obligations /absolute/path/state/obligations.json
 ```
 
+The account grid sorts by usage, five-hour and weekly resets, banked resets, process count and measurement time. Expand an account for forecast and verification details. To show recorded banked reset counts, add `--banked-resets /path/to/banked-resets.json`:
+
+```json
+{"accounts":{"person@example.com":{"count":1,"observed_at":1790298000,"source":"Quota sheet"}}}
+```
+
+Counts are read from this local inventory on each refresh. Blank, missing or invalid counts display as unknown, never zero. Keep the inventory updated when the source ledger changes; its observation time is visible in account details. Banked resets are excluded from runway and require explicit authorization to use.
+
 Open http://127.0.0.1:8767. It binds only to loopback and requires no Python dependencies, model calls, CDN or cloud service. The page's five-second refresh does not imply a fresh quota measurement: each reading retains its actual timestamp. Run the deterministic monitor from your scheduler for new measurements; only material incidents need an agent wakeup. The dashboard is read-only and cannot switch accounts or spend resets.
 
 Forecasts use two distinct observations from the same account and window; they expire with the underlying data. They estimate quota use, not API dollars or tokens. Plan percentages are not interchangeable across accounts. Supply `--session-threshold` and `--other-threshold` if your monitor uses nondefault thresholds. See the [architecture](docs/architecture.md).
