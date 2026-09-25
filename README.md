@@ -54,7 +54,7 @@ Counts are read from this local inventory on each refresh. Blank, missing or inv
 
 Open http://127.0.0.1:8767. It binds only to loopback and requires no Python dependencies, model calls, CDN or cloud service. The page's five-second refresh does not imply a fresh quota measurement: each reading retains its actual timestamp. Run the deterministic monitor from your scheduler for new measurements; only material incidents need an agent wakeup. The dashboard is read-only and cannot switch accounts or spend resets.
 
-Forecasts use two distinct observations from the same account and window; they expire with the underlying data. They estimate quota use, not API dollars or tokens. Plan percentages are not interchangeable across accounts. Supply `--session-threshold` and `--other-threshold` if your monitor uses nondefault thresholds. See the [architecture](docs/architecture.md).
+Forecasts use two distinct observations from the same account and window; they expire with the underlying data. Quota forecasts estimate quota use independently of token accounting. Plan percentages are not interchangeable across accounts. Supply `--session-threshold` and `--other-threshold` if your monitor uses nondefault thresholds. See the [architecture](docs/architecture.md).
 
 The top health bar compares the current allocation's measured runway with a selected 1–24 hour work horizon. It explicitly reports when an active account has already crossed its switch guard and no verified spare is ready. It shows the first switch guard, verified standby count, and next five-hour reset on an account whose last observed weekly/model usage is below the allocation guards. Weekly resets are not substituted for that five-hour countdown. It does not add percentages across plans or credit a future reset before verification. Missing or flat rate samples produce unknown coverage; a stale monitor removes the health forecast.
 
@@ -87,3 +87,37 @@ MIT licensed. Independent project; not affiliated with Anthropic or OpenAI.
 Keep a separate, normally authenticated Claude configuration directory for each subscription, including the account currently carrying work. Rotating launchers must never be the only measurement route. Finish the CLI onboarding once and prove a disposable native `/usage` refresh before registering the route; `auth status` alone is insufficient. Do not copy credentials.
 
 The local fleet adapter now publishes a separate `capacity[email].verification` record (`state`, `reason`, last attempt/result), which the dashboard displays without confusing missing authentication with exhausted quota. Detect a lost standby route even while the active launcher still supplies fresh quota. Size the inference-free refresh batch for the whole inventory: Tyler's eleven-account deployment checks up to four independent standbys per three-minute cycle, refreshing from five minutes old and retaining the fifteen-minute validity cap. Retry failures separately and recheck after natural resets. This adapter scheduling policy is distinct from the public cache-only collector.
+
+
+### Throughput and fleet outlook
+
+Repeat `--transcript-root /path/to/claude-config` for every launcher directory.
+A background reader scans local `projects/**/*.jsonl` once a minute, then reads
+only appended bytes. It includes subagents, deduplicates repeated response IDs
+across content blocks and copied logs, and keeps only usage metadata for the last
+hour in memory. The first scan can take a few minutes on large histories; HTTP
+refreshes remain responsive. No inference or network request is used.
+
+The dashboard shows 15-minute processed/output token rates and trailing-hour
+API-equivalent estimates. Processed includes cached reads. Dated Anthropic global
+list prices separate input, output, cache reads and both write TTLs. Missing TTLs
+produce a price range; unknown models are explicitly unpriced. These are token
+price estimates, not subscription bills or server quota conversions; server tool
+fees are excluded. Prices live in `scripts/throughput.py` and need review when
+models/prices change.
+
+The separate reset-aware outlook simulates equal-capacity accounts at the measured
+fleet burn rate, with ideal workload transfers and scheduled natural resets. It
+shows the first combined capacity gap, a weekly/model-only horizon, and 25% faster
+burn scenarios. These are conditional scenarios, not confidence intervals or
+allocation authority. Unknown accounts and banked resets are excluded. Short
+samples projected days ahead are uncertain. Cancelled accounts leave the scenario
+at the start of their recorded expiration day. Actual switches still require
+fresh live verification.
+
+The grid labels weekly usage >=95% **Weekly exhausted**, 85–94% **Weekly limited**,
+and session usage >=80% **5-hour limited** when weekly/model guards permit it.
+Allocation guards do not change. Per-account burn rates use percentage points per
+hour. The optional local inventory also accepts `cancelled` (boolean) and
+`expiration_date` (ISO date) for each account; non-cancelled accounts display N/A.
+These dates are ledger observations, not proof that access has ended.

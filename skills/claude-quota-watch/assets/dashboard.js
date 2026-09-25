@@ -47,6 +47,8 @@ $('health-horizon').addEventListener('change',()=>{if(latestData)renderHealth(la
 function render(data) {
   latestData=data;
   renderHealth(data);
+  renderOutlook(data);
+  renderThroughput(data.throughput);
   $('error').hidden = true;
   const heartbeat = $('heartbeat');
   heartbeat.textContent = data.monitor_ok ? `Monitor checked ${age(data.monitor_age_seconds)}` : `Monitor overdue · ${age(data.monitor_age_seconds)}`;
@@ -56,7 +58,9 @@ function render(data) {
   const summary = $('summary'); summary.replaceChildren();
   for (const [label,value,note] of [
     ['Verified available', rows.filter(a=>a.state==='available').length, 'Current quota and eligibility'],
-    ['Constrained', rows.filter(a=>a.state==='constrained').length, 'Session or weekly/model threshold'],
+    ['Weekly exhausted', rows.filter(a=>a.display_status==='weekly_exhausted').length, '95% or more weekly used'],
+    ['5-hour limited', rows.filter(a=>a.display_status==='session_limited').length, 'Session guard reached; weekly quota remains'],
+    ['Other limited', rows.filter(a=>['weekly_limited','model_limited','constrained'].includes(a.display_status || a.state)).length, 'Weekly or model switch guard'],
     ['Needs verification', rows.filter(a=>a.state.endsWith('unknown')).length, 'Unknown is not exhausted'],
     ['Running processes', totalProcesses, 'Approximate load; not subagents']]) {
     const card=make('div',undefined,'stat'); card.append(make('span',label),make('b',String(value)),make('small',note)); summary.append(card);
@@ -72,8 +76,8 @@ function render(data) {
 
 const columns = [
   ['email','Account'], ['state','Status'], ['session','Five-hour'],
-  ['weekly','Weekly'], ['fable','Fable'], ['reset','5h reset'],
-  ['weekly_reset','Weekly reset'], ['banked_resets','Banked resets'],
+  ['weekly','Weekly'], ['fable','Fable'], ['session_rate','5h burn / h'], ['weekly_rate','Weekly burn / h'], ['reset','5h reset'],
+  ['weekly_reset','Weekly reset'], ['banked_resets','Banked resets'], ['expiration_date','Expiration date'],
   ['switch','Switch guard'], ['processes','Processes'], ['observed','Verified']
 ];
 let accountSort = {key:'priority',direction:'asc'};
@@ -81,11 +85,14 @@ try { const saved=JSON.parse(localStorage.getItem('quota-account-sort')); if(sav
 const expandedAccounts = new Set();
 const windowFor = (account,name) => account.windows.find(w=>w.name===name);
 const activeAccount = account => account.profiles.length>0 || account.process_count>0;
+const statusLabel = account => ({session_limited:'5-hour limited'}[account.display_status] || (account.display_status || account.state).replaceAll('_',' '));
 function sortValue(account,key) {
   if (['session','weekly','fable'].includes(key)) return windowFor(account,key)?.used ?? null;
+  if(key.endsWith('_rate')) {const w=windowFor(account,key.replace('_rate',''));return w?.fresh && w.rate_per_minute!=null ? w.rate_per_minute*60 : null;}
   if(key==='reset') return windowFor(account,'session')?.reset ?? null;
   if(key==='weekly_reset') return windowFor(account,'weekly')?.reset ?? null;
   if(key==='switch') return account.state.endsWith('unknown') ? null : account.minutes_to_first_threshold;
+  if(key==='state') return statusLabel(account);
   if(key==='processes') return account.process_count;
   if(key==='observed') return account.observed_at;
   return account[key];
@@ -136,19 +143,25 @@ function renderAccounts(rows) {
   $('account-sort-note').textContent=accountSort.key==='priority' ? 'Active accounts nearest their guard first, then ready spares.' : `Sorted by ${columns.find(c=>c[0]===accountSort.key)[1].toLowerCase()} · ${accountSort.direction==='asc' ? 'ascending' : 'descending'}. Unknown values last.`;
   const body=$('account-body');body.replaceChildren();
   for(const [index,account] of sortedAccounts(rows).entries()) {
-    const tr=make('tr',undefined,`account-row ${account.state}${activeAccount(account) ? ' active-account' : ''}`);
+    const tr=make('tr',undefined,`account-row ${account.state} ${account.display_status || account.state}${activeAccount(account) ? ' active-account' : ''}`);
     const name=make('th');name.scope='row';
     const toggle=make('button',`${expandedAccounts.has(account.email) ? '▾' : '▸'} ${account.email}`,'account-toggle');
     toggle.type='button';toggle.dataset.account=account.email;
     toggle.setAttribute('aria-expanded',String(expandedAccounts.has(account.email)));toggle.setAttribute('aria-controls',`account-detail-${index}`);
     toggle.addEventListener('click',()=>{expandedAccounts.has(account.email) ? expandedAccounts.delete(account.email) : expandedAccounts.add(account.email);renderAccounts(latestData.accounts);body.querySelectorAll('.account-toggle').forEach(b=>{if(b.dataset.account===account.email)b.focus({preventScroll:true});});});
     name.append(toggle,make('small',account.profiles.join(' · ') || 'Standby','profile-label'));tr.append(name);
-    const status=make('td');status.append(make('span',account.state.replaceAll('_',' '),'state'));tr.append(status);
+    const status=make('td');status.title=account.status_reason || '';status.append(make('span',statusLabel(account),'state'));tr.append(status);
     for(const key of ['session','weekly','fable']) {
       const w=windowFor(account,key), cell=make('td',undefined,`usage-cell window${!w?.fresh ? ' stale' : w.used>=w.threshold ? ' warn' : ''}`);
       cell.append(make('b',w?.used==null ? 'Unknown' : `${w.used}%`));
       if(w?.used!=null) {const bar=make('progress',undefined,'meter');bar.max=100;bar.value=w.used;bar.setAttribute('aria-label',`${account.email} ${key} ${w.used}% used${w.fresh ? '' : ', stale'}`);cell.append(bar);}
       if(w && !w.fresh && w.used!=null) cell.append(make('small','Stale'));
+      tr.append(cell);
+    }
+    for(const kind of ['session','weekly']) {
+      const w=windowFor(account,kind), rate=w?.fresh && w.rate_per_minute!=null ? w.rate_per_minute*60 : null;
+      const cell=make('td',rate==null ? 'No estimate' : `${rate.toFixed(1)} pp/h`,'rate-cell');
+      if(rate!=null) cell.append(make('small',`${Math.round(w.sample_minutes)}m sample`));
       tr.append(cell);
     }
     for(const kind of ['session','weekly']) {
@@ -160,12 +173,16 @@ function renderAccounts(rows) {
     const banked=make('td',String(account.banked_resets ?? 'Unknown'),'banked-cell');
     banked.title=account.banked_resets_observed_at ? `Recorded ${clock(account.banked_resets_observed_at)} · ${account.banked_resets_source || 'inventory'} · explicit authorization required to use` : 'Count not recorded; unknown is not zero';
     tr.append(banked);
+    const expires=make('td',account.cancelled===false ? 'N/A' : account.expiration_date || 'Not recorded','reset-cell');
+    expires.title=account.cancelled===false ? 'No cancellation marked in the ledger' : 'Recorded cancellation end date from the ledger; paid-through date should be verified before expiry';
+    tr.append(expires);
     tr.append(make('td',account.state.endsWith('unknown') ? 'Verify capacity' : account.minutes_to_first_threshold===0 && !activeAccount(account) ? 'At guard' : duration(account.minutes_to_first_threshold),'switch-cell'));
     tr.append(make('td',String(account.process_count ?? '?'),'numeric'));
     const verified=make('td',age(account.age_seconds),'verified-cell');verified.title=clock(account.observed_at);tr.append(verified);body.append(tr);
     const detail=make('tr',undefined,'account-detail');detail.id=`account-detail-${index}`;detail.hidden=!expandedAccounts.has(account.email);
     const cell=make('td');cell.colSpan=columns.length;
     const card=make('div',undefined,'account-detail-content');
+    if(account.status_reason) card.append(make('p',account.status_reason,'verification'));
     if (account.verification) {
       const v=account.verification;
       const info=make('p',undefined,'verification');
@@ -193,9 +210,40 @@ function renderAccounts(rows) {
 }
 initAccountTable();
 
+
+function metricsInto(id,items) {
+  const target=$(id);target.replaceChildren();
+  for(const [label,value,note] of items){const n=make('div',undefined,'health-metric');n.append(make('span',label),make('b',value),make('small',note));target.append(n);}
+}
+function renderOutlook(data) {
+  const f=data.fleet_forecast;
+  if(!f || f.state!=='scenario') {metricsInto('outlook-metrics',[]);$('outlook-note').textContent='Fleet outlook needs fresh, positive session and weekly burn measurements across all active accounts.';return;}
+  const gap=n=>n==null ? 'Beyond 7 days' : duration(n);
+  metricsInto('outlook-metrics',[
+    ['First modeled capacity gap',gap(f.combined_gap_minutes),'Includes scheduled five-hour and weekly resets'],
+    ['If burn rises 25%',gap(f.faster_gap_minutes),'Sensitivity scenario, not a confidence interval'],
+    ['Weekly / model quota horizon',gap(f.weekly_gap_minutes),'Ignores five-hour limits; includes weekly resets'],
+    ['Weekly at 25% faster burn',gap(f.weekly_faster_gap_minutes),'Long-term constraint if this pace persists']]);
+  const when=f.combined_gap_minutes==null ? 'No gap modeled within seven days.' : `First modeled gap around ${clock(data.served_at+f.combined_gap_minutes*60)}.`;
+  $('outlook-note').textContent=`Conditional forecast: ${when} ${f.accounts_included} measured accounts, ${f.unknown_accounts} unknown excluded; ${Math.round(f.sample_minutes)}-minute rate sample. ${f.assumption} A short sample projected days ahead is a scenario, not guaranteed coverage. Recomputed with each measurement.`;
+}
+function renderThroughput(t) {
+  if(!t || t.state!=='ready') {metricsInto('throughput-metrics',[]);$('throughput-note').textContent=t?.state==='loading' ? 'Indexing the last hour of local Claude logs…' : 'Local token measurements unavailable.';return;}
+  const w=t.windows.find(w=>w.minutes===15), hour=t.windows.find(w=>w.minutes===60);
+  const compact=n=>new Intl.NumberFormat(undefined,{notation:'compact',maximumFractionDigits:1}).format(n);
+  const dollars=w=>w.unpriced_models.length ? 'Partially priced' : Math.abs(w.usd_per_hour_high-w.usd_per_hour_low)<.01 ? `$${w.usd_per_hour_low.toFixed(0)}/h` : `$${w.usd_per_hour_low.toFixed(0)}–${w.usd_per_hour_high.toFixed(0)}/h`;
+  metricsInto('throughput-metrics',[
+    ['Processed tokens / h',compact(w.processed_per_hour),'Last 15 minutes scaled to an hour; includes cache reads'],
+    ['Output tokens / h',compact(w.output_per_hour),'Generated output, including reported thinking'],
+    ['API-equivalent / h',dollars(w),'15-minute pace at dated API list prices'],
+    ['Last-hour API equivalent',dollars(hour).replace('/h',''),'Actual trailing 60-minute token usage']]);
+  $('throughput-note').replaceChildren(document.createTextNode(`${t.roots} launcher directories, including subagents; ${w.requests} unique responses in 15 minutes. Updated ${age(Date.now()/1000-t.checked_at)}. ${t.read_errors ? t.read_errors+' files/directories unreadable; totals may be incomplete. ' : ''}Cached reads are processed tokens, not newly generated text. API equivalent is an estimate, not your subscription bill; excludes server tool fees. Cache-write TTL missing in older logs produces a price range. `));
+  const link=make('a',`Anthropic pricing (${t.price_date})`);link.href=t.price_source;link.target='_blank';link.rel='noreferrer';$('throughput-note').append(link);
+}
+
 async function refresh() {
   try { const result=await fetch('/api/status',{cache:'no-store',signal:AbortSignal.timeout(4000)}); if(!result.ok) throw new Error('Snapshot unavailable'); render(await result.json()); }
-  catch(error) { $('error').hidden=false; $('error').textContent='Dashboard data unavailable. Values below may be stale. Retrying automatically.'; $('heartbeat').textContent='Connection lost'; $('heartbeat').className='badge warn'; $('fleet-health').className='fleet-health unknown'; $('health-title').textContent='Live health unavailable'; $('health-verdict').textContent='Connection lost. Previous forecasts are stale.'; $('health-bar').value=0; $('health-scale').replaceChildren(); $('health-metrics').replaceChildren(); $('health-action').textContent='Wait for fresh measurements before relying on a capacity estimate.'; latestData=null; }
+  catch(error) { renderThroughput(null);metricsInto('outlook-metrics',[]);$('outlook-note').textContent='Forecast unavailable until fresh dashboard data returns.'; $('error').hidden=false; $('error').textContent='Dashboard data unavailable. Values below may be stale. Retrying automatically.'; $('heartbeat').textContent='Connection lost'; $('heartbeat').className='badge warn'; $('fleet-health').className='fleet-health unknown'; $('health-title').textContent='Live health unavailable'; $('health-verdict').textContent='Connection lost. Previous forecasts are stale.'; $('health-bar').value=0; $('health-scale').replaceChildren(); $('health-metrics').replaceChildren(); $('health-action').textContent='Wait for fresh measurements before relying on a capacity estimate.'; latestData=null; }
   finally { setTimeout(refresh,5000); }
 }
 refresh();

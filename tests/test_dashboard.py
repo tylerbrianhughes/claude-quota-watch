@@ -22,6 +22,21 @@ def state():
 
 
 class DashboardTests(unittest.TestCase):
+    def test_display_distinguishes_weekly_exhaustion_from_session_guard(self):
+        for weekly, session, expected in ((94,90,'weekly_limited'),(95,10,'weekly_exhausted'),
+                                           (100,90,'weekly_exhausted'),(60,80,'session_limited'),
+                                           (60,79,'available'),(85,20,'weekly_limited')):
+            with self.subTest(weekly=weekly,session=session):
+                data=state()
+                data['accounts'][A]['limits']['weekly']['used']=weekly
+                data['accounts'][A]['limits']['session']['used']=session
+                row=d.dashboard_view(data,NOW)['accounts'][0]
+                self.assertEqual(row['display_status'],expected)
+                self.assertEqual(row['state'],'available' if expected=='available' else 'constrained')
+                stale=d.dashboard_view(data,NOW+901)['accounts'][0]
+                self.assertEqual(stale['display_status'],'quota_unknown')
+
+
     def test_banked_reset_counts_are_recorded_not_available_runway(self):
         baseline=d.dashboard_view(state(),NOW)
         for count in (0,1,3):

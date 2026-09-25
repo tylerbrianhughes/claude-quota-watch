@@ -8,6 +8,8 @@ import time
 from urllib.parse import urlsplit
 
 from quota_watch import number, timestamp, read_json
+from fleet_forecast import forecast
+from throughput import Throughput
 
 ASSETS = Path(__file__).resolve().parents[1] / "assets"
 
@@ -143,6 +145,25 @@ def dashboard_view(state, now, max_age=900, obligations=None, session_threshold=
             status = "quota_unknown" if status != "eligibility_unknown" else status
         elif status == "available" and any(x["used"] >= x["threshold"] for x in windows):
             status = "constrained"
+        # Presentation distinguishes weekly depletion from a temporary session guard.
+        # Keep allocation state and forecast policy unchanged.
+        display_status = status
+        status_reason = ""
+        if not status.endswith("unknown"):
+            weekly = next(x for x in windows if x["name"] == "weekly")
+            session = next(x for x in windows if x["name"] == "session")
+            if weekly["used"] >= 95:
+                display_status = "weekly_exhausted"
+                status_reason = "At least 95% weekly used; treated as effectively exhausted until the weekly reset."
+            elif weekly["used"] >= weekly["threshold"]:
+                display_status = "weekly_limited"
+                status_reason = "Weekly switch guard reached, but below the 95% exhaustion threshold."
+            elif any(x["used"] >= x["threshold"] for x in windows if x["name"] not in ("session", "weekly")):
+                display_status = "model_limited"
+                status_reason = "A model-specific quota has reached its switch guard."
+            elif session["used"] >= session["threshold"]:
+                display_status = "session_limited"
+                status_reason = "Five-hour switch guard reached; weekly quota remains. Verify again after the five-hour reset."
         profiles = capacity.get("profiles", [name for name, a in state.get("aliases", {}).items() if a.get("email") == email])
         candidates = [x["minutes_to_threshold"] for x in windows if x["minutes_to_threshold"] is not None and not x["reset_before_threshold"]]
         banked = recorded.get(email, {})
@@ -153,7 +174,8 @@ def dashboard_view(state, now, max_age=900, obligations=None, session_threshold=
             count = None
         rows.append({"banked_resets": count,
                      "banked_resets_observed_at": epoch(banked.get("observed_at")),
-                     "banked_resets_source": banked.get("source"), "email": email, "state": status, "profiles": profiles,
+                     "banked_resets_source": banked.get("source"),
+                     "cancelled": banked.get("cancelled"), "expiration_date": banked.get("expiration_date"), "email": email, "state": status, "display_status": display_status, "status_reason": status_reason, "profiles": profiles,
                      "verification": capacity.get("verification"),
                      "process_count": capacity.get("process_count"), "observed_at": observed,
                      "age_seconds": age, "windows": windows,
@@ -166,13 +188,14 @@ def dashboard_view(state, now, max_age=900, obligations=None, session_threshold=
     return {"served_at": now, "checked_at": checked, "monitor_ok": monitor_ok,
             "monitor_age_seconds": heartbeat_age, "accounts": rows, "obligations": pending,
             "health": fleet_health(rows, now, monitor_ok),
+            "fleet_forecast": forecast(rows, now, monitor_ok),
             "events": state.get("events", []), "notification_succeeded": state.get("notification_succeeded", state.get("queued")),
             "notification_error": state.get("notification_error"), "page_refresh_seconds": 5,
             "measurement_max_age_seconds": max_age, "session_threshold": session_threshold,
             "other_threshold": other_threshold}
 
 
-def handler_for(status_path, obligations_path=None, max_age=900, session_threshold=80, other_threshold=85, banked_resets_path=None):
+def handler_for(status_path, obligations_path=None, max_age=900, session_threshold=80, other_threshold=85, banked_resets_path=None, throughput=None):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             # Loopback binding plus Host validation prevents DNS rebinding reads.
@@ -189,6 +212,7 @@ def handler_for(status_path, obligations_path=None, max_age=900, session_thresho
                     except (OSError, ValueError):
                         banked = None
                     payload = dashboard_view(state, time.time(), max_age, obligations, session_threshold, other_threshold, banked)
+                    payload["throughput"] = throughput.snapshot if throughput else {"state":"not_configured"}
                     body = json.dumps(payload, allow_nan=False).encode()
                 except (OSError, ValueError, TypeError, AttributeError):
                     self.respond(503, b'{"error":"Snapshot unavailable or invalid; retrying"}', "application/json")
@@ -221,6 +245,7 @@ def main():
     parser.add_argument("--status", type=Path, required=True)
     parser.add_argument("--obligations", type=Path)
     parser.add_argument("--banked-resets", type=Path, help="Read-only JSON inventory of recorded banked reset counts")
+    parser.add_argument("--transcript-root", action="append", type=Path, default=[], help="Claude config directory; repeat for every launcher. Read-only background accounting.")
     parser.add_argument("--port", type=int, default=8767)
     parser.add_argument("--max-age", type=int, default=900)
     parser.add_argument("--session-threshold", type=float, default=80)
@@ -228,7 +253,9 @@ def main():
     args = parser.parse_args()
     if args.max_age <= 0 or not 0 < args.session_threshold <= 100 or not 0 < args.other_threshold <= 100:
         parser.error("Use a positive age and thresholds between 0 and 100")
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(args.status.expanduser(), args.obligations.expanduser() if args.obligations else None, args.max_age, args.session_threshold, args.other_threshold, args.banked_resets.expanduser() if args.banked_resets else None))
+    usage = Throughput(args.transcript_root) if args.transcript_root else None
+    if usage: usage.start()
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(args.status.expanduser(), args.obligations.expanduser() if args.obligations else None, args.max_age, args.session_threshold, args.other_threshold, args.banked_resets.expanduser() if args.banked_resets else None, usage))
     print(f"Quota fleet dashboard: http://127.0.0.1:{server.server_port}", flush=True)
     server.serve_forever()
 

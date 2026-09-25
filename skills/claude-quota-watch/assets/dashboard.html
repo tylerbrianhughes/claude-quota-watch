@@ -11,13 +11,15 @@
 <p id="health-action" class="health-action"></p>
 <details><summary>Estimate assumptions</summary><p id="health-assumptions"></p></details>
 </section>
+<section class="forecast-note" id="capacity-outlook" aria-label="Reset-aware fleet forecast"><strong>Reset-aware fleet outlook</strong><div id="outlook-metrics" class="health-metrics"></div><p id="outlook-note">Waiting for measurements.</p></section>
+<section class="forecast-note" aria-label="Measured throughput"><strong>Claude throughput</strong><div id="throughput-metrics" class="health-metrics"></div><p id="throughput-note">Reading local usage logs…</p></section>
 <section class="summary" aria-label="Fleet summary" id="summary"></section>
 <div class="section-title"><h2>Account capacity</h2><span id="updated">Waiting for snapshot</span></div>
 <div class="account-toolbar"><p id="account-sort-note">Active accounts nearest their guard first, then ready spares.</p><button id="priority-sort" type="button" aria-pressed="true">Priority order</button></div>
 <div class="table-scroll" role="region" aria-label="Sortable account capacity" tabindex="0">
 <table id="accounts" class="account-table"><caption>Account capacity · select a column to sort or an account to see details</caption><thead><tr id="account-head"></tr></thead><tbody id="account-body"></tbody></table>
 </div>
-<section class="forecast-note"><strong>Reading the forecast</strong><p>Burn rate is percentage points per minute within each account’s own quota window. Estimates use two distinct observations, subtract the age of the latest reading, and assume the same workload continues. Quotas differ between plans, so percentages are not added into a fleet total or converted into dollars. “No estimate” means insufficient evidence, not unlimited capacity.</p></section>
+<section class="forecast-note"><strong>Reading the forecast</strong><p>Burn rate is percentage points per minute within each account’s own quota window. Estimates use two distinct observations, subtract the age of the latest reading, and assume the same workload continues. Per-account rates are percentage points per hour. The separate fleet scenario assumes equal-sized accounts; token-based API estimates come from local logs, never quota percentages. “No estimate” means insufficient evidence, not unlimited capacity.</p></section>
 <div class="section-title"><h2>Recovery still owed</h2><span>Login ≠ live adoption</span></div><section id="obligations" class="obligations"></section>
 <footer><strong>5-second page refresh · scheduled quota measurements</strong><p>Page refreshes only read local JSON. Measurement age appears on every account; a stopped monitor is shown explicitly. Switching and recovery may wake an agent. No automatic resets or refills.</p></footer>
 </main></body></html>
