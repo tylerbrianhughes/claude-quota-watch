@@ -101,6 +101,7 @@ class Throughput:
                             except (ValueError,TypeError,AttributeError):pass
                     self.offsets[f]=(offset,st.st_ino)
                 except OSError:errors+=1
+        now=time.time()
         self.events={k:v for k,v in self.events.items() if v['at']>=now-3600}
         result=self.summarize(now);result['read_errors']=errors
         self.snapshot=result

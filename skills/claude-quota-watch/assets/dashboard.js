@@ -40,6 +40,7 @@ function renderHealth(data) {
   let action=decision.action;
   if(known && !covered && !bridge && h.unknown_accounts) action+=' Verify the unknown accounts before buying another.';
   if(known && reset && reset.minutes>h.runway_minutes) action+=` The next potential reset is ${duration(reset.minutes-h.runway_minutes)} beyond current runway.`;
+  if(data.fleet_forecast?.state==='scenario' && h.active_accounts>1) action='Redistribute work before the next switch guard. Other active accounts may have headroom; the reset-aware fleet scenario below models transfers and natural resets. This next-switch timer is not time until the whole fleet stops.';
   $('health-action').textContent=action;
   $('health-assumptions').textContent=`${h.assumptions} The bar measures time before the first switch, not a sum of account percentages. Ready spares are listed separately. The scenario excludes future natural resets and existing spares; it is a capacity estimate, not a purchase instruction. Short rate samples can change quickly. ${h.reference_account ? 'Reference: '+h.reference_account+'.' : ''}`;
 }
@@ -165,8 +166,9 @@ function renderAccounts(rows) {
       tr.append(cell);
     }
     for(const kind of ['session','weekly']) {
-      const reset=windowFor(account,kind)?.reset;
-      const resetCell=make('td',undefined,'reset-cell');resetCell.append(make('span',reset ? clock(reset) : 'Not started / unknown'));
+      const resetWindow=windowFor(account,kind), reset=resetWindow?.reset;
+      const noReset=kind==='session' && resetWindow?.fresh && resetWindow.used===0 ? 'Not started' : 'Unknown';
+      const resetCell=make('td',undefined,'reset-cell');resetCell.append(make('span',reset ? clock(reset) : noReset));
       if(reset) resetCell.append(make('small',reset*1000<=Date.now() ? 'Refresh needed' : `in ${duration((reset*1000-Date.now())/60000)}`));
       tr.append(resetCell);
     }
@@ -196,7 +198,7 @@ function renderAccounts(rows) {
       const bar=make('progress',undefined,'meter'); bar.max=100; bar.value=window.used ?? 0; bar.setAttribute('aria-label', `${window.name} used`);
       const details=make('div',undefined,'window-details');
       const rate = window.rate_per_minute === null ? 'No rate estimate' : `${window.rate_per_minute.toFixed(2)} pp/min · ${Math.round(window.sample_minutes)}m sample`;
-      details.append(make('span',rate),make('span',window.reset ? `Resets ${clock(window.reset)}` : 'Reset not started / unknown'));
+      details.append(make('span',rate),make('span',window.reset ? `Resets ${clock(window.reset)}` : window.name==='session' && window.fresh && window.used===0 ? 'Window not started' : 'Reset unknown'));
       const forecast=make('div',undefined,'window-details'); forecast.append(make('span',`${window.threshold}% threshold`),make('span',window.fresh ? window.reset_before_threshold ? 'Reset precedes projected threshold' : duration(window.minutes_to_threshold) : 'Refresh needed'));
       section.append(title,bar,details,forecast); card.append(section);
     }
