@@ -62,11 +62,103 @@ function render(data) {
     const card=make('div',undefined,'stat'); card.append(make('span',label),make('b',String(value)),make('small',note)); summary.append(card);
   }
   $('updated').textContent = `Snapshot ${clock(data.checked_at)} · page ${new Date().toLocaleTimeString()}`;
-  const accounts = $('accounts'); accounts.replaceChildren();
-  for (const account of rows) {
-    const card=make('article',undefined,`account ${account.state}`);
-    const top=make('div',undefined,'account-top'); top.append(make('h3',account.email),make('span',account.state.replaceAll('_',' '),'state')); card.append(top);
-    const meta=make('div',undefined,'meta'); meta.append(make('span',`${account.profiles.join(' · ') || 'Standby'} · ${account.process_count ?? '?'} processes`),make('span',age(account.age_seconds))); card.append(meta);
+  renderAccounts(rows);
+  const obligations=$('obligations'); obligations.replaceChildren();
+  if (!data.obligations.length) obligations.append(make('p','No open recovery obligations in the current snapshot.','subtitle'));
+  for (const item of data.obligations) {
+    const node=make('article',undefined,'obligation'); node.append(make('h3',`${item.id} · ${item.state?.replaceAll('_',' ')}`),make('p',item.reason || 'No reason recorded'),make('small',`${item.overdue ? 'Overdue · ' : ''}Check by ${clock(item.deadline)}`)); obligations.append(node);
+  }
+}
+
+const columns = [
+  ['email','Account'], ['state','Status'], ['session','Five-hour'],
+  ['weekly','Weekly'], ['fable','Fable'], ['reset','5h reset'],
+  ['switch','Switch guard'], ['processes','Processes'], ['observed','Verified']
+];
+let accountSort = {key:'priority',direction:'asc'};
+try { const saved=JSON.parse(localStorage.getItem('quota-account-sort')); if(saved && ['priority',...columns.map(c=>c[0])].includes(saved.key) && ['asc','desc'].includes(saved.direction)) accountSort=saved; } catch {}
+const expandedAccounts = new Set();
+const windowFor = (account,name) => account.windows.find(w=>w.name===name);
+const activeAccount = account => account.profiles.length>0 || account.process_count>0;
+function sortValue(account,key) {
+  if (['session','weekly','fable'].includes(key)) return windowFor(account,key)?.used ?? null;
+  if(key==='reset') return windowFor(account,'session')?.reset ?? null;
+  if(key==='switch') return account.state.endsWith('unknown') ? null : account.minutes_to_first_threshold;
+  if(key==='processes') return account.process_count;
+  if(key==='observed') return account.observed_at;
+  return account[key];
+}
+function compareValue(a,b,direction='asc') {
+  // Missing measurements stay last in either direction; unknown never means zero.
+  if(a==null || b==null) return a==null ? (b==null ? 0 : 1) : -1;
+  const result=typeof a==='string' ? a.localeCompare(b) : a-b;
+  return direction==='asc' ? result : -result;
+}
+function sortedAccounts(rows,sort=accountSort) {
+  const group=a=>activeAccount(a) ? 0 : a.state==='available' ? 1 : a.state.endsWith('unknown') ? 2 : 3;
+  return [...rows].sort((a,b)=>{
+    const result=sort.key==='priority'
+      ? group(a)-group(b) || (activeAccount(a) ? compareValue(sortValue(a,'switch'),sortValue(b,'switch')) : 0)
+      : compareValue(sortValue(a,sort.key),sortValue(b,sort.key),sort.direction);
+    return result || a.email.localeCompare(b.email);
+  });
+}
+function setAccountSort(key) {
+  accountSort={key,direction:accountSort.key===key && accountSort.direction==='asc' ? 'desc' : 'asc'};
+  try {localStorage.setItem('quota-account-sort',JSON.stringify(accountSort));} catch {}
+  if(latestData) renderAccounts(latestData.accounts);
+}
+function initAccountTable() {
+  const row=$('account-head');
+  for(const [key,label] of columns) {
+    const th=make('th');th.scope='col';th.dataset.key=key;
+    const button=make('button',label,'sort-button');button.type='button';button.addEventListener('click',()=>setAccountSort(key));
+    th.append(button);row.append(th);
+  }
+  $('priority-sort').addEventListener('click',()=>{
+    accountSort={key:'priority',direction:'asc'};
+    try {localStorage.setItem('quota-account-sort',JSON.stringify(accountSort));} catch {}
+    if(latestData) renderAccounts(latestData.accounts);
+  });
+}
+function renderAccounts(rows) {
+  const focus=document.activeElement;
+  const focusedEmail=focus?.dataset?.account;
+  for(const th of $('account-head').children) {
+    const selected=th.dataset.key===accountSort.key;
+    th.setAttribute('aria-sort',selected ? (accountSort.direction==='asc' ? 'ascending' : 'descending') : 'none');
+    const label=columns.find(c=>c[0]===th.dataset.key)[1];
+    th.firstChild.textContent=label+(selected ? (accountSort.direction==='asc' ? ' ↑' : ' ↓') : ' ↕');
+  }
+  $('priority-sort').setAttribute('aria-pressed',String(accountSort.key==='priority'));
+  $('account-sort-note').textContent=accountSort.key==='priority' ? 'Active accounts nearest their guard first, then ready spares.' : `Sorted by ${columns.find(c=>c[0]===accountSort.key)[1].toLowerCase()} · ${accountSort.direction==='asc' ? 'ascending' : 'descending'}. Unknown values last.`;
+  const body=$('account-body');body.replaceChildren();
+  for(const [index,account] of sortedAccounts(rows).entries()) {
+    const tr=make('tr',undefined,`account-row ${account.state}${activeAccount(account) ? ' active-account' : ''}`);
+    const name=make('th');name.scope='row';
+    const toggle=make('button',`${expandedAccounts.has(account.email) ? '▾' : '▸'} ${account.email}`,'account-toggle');
+    toggle.type='button';toggle.dataset.account=account.email;
+    toggle.setAttribute('aria-expanded',String(expandedAccounts.has(account.email)));toggle.setAttribute('aria-controls',`account-detail-${index}`);
+    toggle.addEventListener('click',()=>{expandedAccounts.has(account.email) ? expandedAccounts.delete(account.email) : expandedAccounts.add(account.email);renderAccounts(latestData.accounts);body.querySelectorAll('.account-toggle').forEach(b=>{if(b.dataset.account===account.email)b.focus({preventScroll:true});});});
+    name.append(toggle,make('small',account.profiles.join(' · ') || 'Standby','profile-label'));tr.append(name);
+    const status=make('td');status.append(make('span',account.state.replaceAll('_',' '),'state'));tr.append(status);
+    for(const key of ['session','weekly','fable']) {
+      const w=windowFor(account,key), cell=make('td',undefined,`usage-cell window${!w?.fresh ? ' stale' : w.used>=w.threshold ? ' warn' : ''}`);
+      cell.append(make('b',w?.used==null ? 'Unknown' : `${w.used}%`));
+      if(w?.used!=null) {const bar=make('progress',undefined,'meter');bar.max=100;bar.value=w.used;bar.setAttribute('aria-label',`${account.email} ${key} ${w.used}% used${w.fresh ? '' : ', stale'}`);cell.append(bar);}
+      if(w && !w.fresh && w.used!=null) cell.append(make('small','Stale'));
+      tr.append(cell);
+    }
+    const reset=windowFor(account,'session')?.reset;
+    const resetCell=make('td',undefined,'reset-cell');resetCell.append(make('span',reset ? clock(reset) : 'Not started / unknown'));
+    if(reset) resetCell.append(make('small',reset*1000<=Date.now() ? 'Refresh needed' : `in ${duration((reset*1000-Date.now())/60000)}`));
+    tr.append(resetCell);
+    tr.append(make('td',account.state.endsWith('unknown') ? 'Verify capacity' : account.minutes_to_first_threshold===0 && !activeAccount(account) ? 'At guard' : duration(account.minutes_to_first_threshold),'switch-cell'));
+    tr.append(make('td',String(account.process_count ?? '?'),'numeric'));
+    const verified=make('td',age(account.age_seconds),'verified-cell');verified.title=clock(account.observed_at);tr.append(verified);body.append(tr);
+    const detail=make('tr',undefined,'account-detail');detail.id=`account-detail-${index}`;detail.hidden=!expandedAccounts.has(account.email);
+    const cell=make('td');cell.colSpan=columns.length;
+    const card=make('div',undefined,'account-detail-content');
     if (account.verification) {
       const v=account.verification;
       const info=make('p',undefined,'verification');
@@ -84,14 +176,15 @@ function render(data) {
       const forecast=make('div',undefined,'window-details'); forecast.append(make('span',`${window.threshold}% threshold`),make('span',window.fresh ? window.reset_before_threshold ? 'Reset precedes projected threshold' : duration(window.minutes_to_threshold) : 'Refresh needed'));
       section.append(title,bar,details,forecast); card.append(section);
     }
-    const projection=make('div',undefined,'projection'); projection.append(make('span','Earliest projected threshold'),make('b',account.state.endsWith('unknown') ? 'Verify capacity' : duration(account.minutes_to_first_threshold))); card.append(projection); accounts.append(card);
+
+    const tasks=(latestData?.obligations || []).filter(o=>account.profiles.some(p=>o.id===p || o.id.startsWith(p+'_')));
+    for(const task of tasks) card.append(make('p',`${task.id}: ${task.reason}`,'verification'));
+    cell.append(card);detail.append(cell);body.append(detail);
   }
-  const obligations=$('obligations'); obligations.replaceChildren();
-  if (!data.obligations.length) obligations.append(make('p','No open recovery obligations in the current snapshot.','subtitle'));
-  for (const item of data.obligations) {
-    const node=make('article',undefined,'obligation'); node.append(make('h3',`${item.id} · ${item.state?.replaceAll('_',' ')}`),make('p',item.reason || 'No reason recorded'),make('small',`${item.overdue ? 'Overdue · ' : ''}Check by ${clock(item.deadline)}`)); obligations.append(node);
-  }
+  if(focusedEmail) body.querySelectorAll('.account-toggle').forEach(b=>{if(b.dataset.account===focusedEmail)b.focus({preventScroll:true});});
 }
+initAccountTable();
+
 async function refresh() {
   try { const result=await fetch('/api/status',{cache:'no-store',signal:AbortSignal.timeout(4000)}); if(!result.ok) throw new Error('Snapshot unavailable'); render(await result.json()); }
   catch(error) { $('error').hidden=false; $('error').textContent='Dashboard data unavailable. Values below may be stale. Retrying automatically.'; $('heartbeat').textContent='Connection lost'; $('heartbeat').className='badge warn'; $('fleet-health').className='fleet-health unknown'; $('health-title').textContent='Live health unavailable'; $('health-verdict').textContent='Connection lost. Previous forecasts are stale.'; $('health-bar').value=0; $('health-scale').replaceChildren(); $('health-metrics').replaceChildren(); $('health-action').textContent='Wait for fresh measurements before relying on a capacity estimate.'; latestData=null; }

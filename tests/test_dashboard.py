@@ -137,6 +137,26 @@ assert.equal(ctx.healthDecision(h,true,180).title,'Next switch ahead: verified s
 """
         subprocess.run(['node','-e',js,str(asset)],check=True)
 
+    def test_grid_numeric_sort_unknowns_and_fleet_priority(self):
+        asset=SCRIPTS.parent/'assets/dashboard.js'
+        js="""
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const source=fs.readFileSync(process.argv[1],'utf8');
+const ctx={};vm.createContext(ctx);
+vm.runInContext(source.slice(source.indexOf('const columns ='), source.indexOf('function setAccountSort')),ctx);
+const row=(email,used,profiles=[],state='available',eta=null)=>({email,state,profiles,
+  process_count:profiles.length,windows:[{name:'session',used}],minutes_to_first_threshold:eta});
+const rows=[row('spare',9),row('busy',80,['a'],'constrained',0),
+  row('unknown',null,[],'quota_unknown'),row('healthy',10,['b'],'available',60),
+  row('spent',100,[],'constrained',0)];
+const names=sort=>Array.from(ctx.sortedAccounts(rows,sort),r=>r.email);
+assert.deepEqual(names({key:'session',direction:'asc'}),['spare','healthy','busy','spent','unknown']);
+assert.deepEqual(names({key:'session',direction:'desc'}),['spent','busy','healthy','spare','unknown']);
+assert.deepEqual(names({key:'priority',direction:'asc'}),['busy','healthy','spare','unknown','spent']);
+assert.equal(rows[0].email,'spare'); // Rendering must not reorder the source snapshot.
+"""
+        subprocess.run(['node','-e',js,str(asset)],check=True)
+
     def test_runway_and_identical_account_scenario_use_guards(self):
         h=self.health(now=NOW+120)
         self.assertEqual(h['runway_minutes'],18)
